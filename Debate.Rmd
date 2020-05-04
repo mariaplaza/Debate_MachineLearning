@@ -1,0 +1,741 @@
+---
+title: "Debate"
+author: "Maria Plaza"
+date: '`r format(Sys.time(), "%d %B, %Y")`'
+output:
+  pdf_document:
+    toc_depth: 2
+    toc: true
+  html_document: 
+    fig_caption: yes
+    keep_md: yes
+    toc: yes
+    toc_float: yes
+  word_document:
+    toc: true
+link-citations: yes
+bibliography: scholar.bib
+---
+
+```{r setup, include=FALSE}
+require(knitr)
+knitr::opts_chunk$set(comment = NA, prompt = TRUE, tidy = FALSE, 
+               fig.width = 7, fig.height = 7,echo = TRUE, 
+               message = FALSE, warning = FALSE, cache=FALSE)
+Sys.setlocale("LC_TIME", "C")
+```
+
+```{r paquetes, include=FALSE}
+if(!(require(htmltools))) install.packages("htmltools")
+if(!(require(bookdown))) install.packages("bookdown")
+if(!(require(bibtex))) install.packages("bibtex")
+# Para cada librería preguntamos primero si está instalada
+if(!is.element("dplyr", installed.packages()[, 1]))
+      install.packages("dplyr", repos = 'http://cran.us.r-project.org')
+library(dplyr)
+if(!is.element("ggplot2", installed.packages()[, 1]))
+      install.packages("ggplot2", repos = 'http://cran.us.r-project.org')
+library(ggplot2)
+if(!is.element("lubridate", installed.packages()[, 1]))
+      install.packages("lubridate", repos = 'http://cran.us.r-project.org')
+library(lubridate)
+if(!is.element("chron", installed.packages()[, 1]))
+      install.packages("chron", repos = 'http://cran.us.r-project.org')
+library(chron)
+if(!is.element("pROC", installed.packages()[, 1]))
+      install.packages("pROC", repos = 'http://cran.us.r-project.org')
+library(pROC)
+if(!(require(printr))) {
+  install.packages(
+    'printr',
+    type = 'source',
+    repos = c('http://yihui.name/xran', 'http://cran.rstudio.com')
+  )
+}
+```
+
+<div class=text-justify>
+
+# Introducción
+
+El objetivo de este documento es mostrar de una forma sencilla y directa cómo crear modelos de machine learning combinando lenguaje de programación R y el paquete H2O [@aiello2016machine]. H2O ofrece un paquete R que se puede instalar desde CRAN y un paquete de Python que se puede instalar desde PyPI.H2O también se puede descargar directamente desde http://h2o.ai/download.
+
+H2O es un producto creado por la compañía **H2O.ai** con el fin de combinar los principales algoritmos de machine learning y aprendizaje estadístico con el Big Data. Usando técnicas de compresión en memoria, H2O puede manejar miles de millones de filas de datos en memoria, incluso con un clúster bastante pequeño. H2O es de código abierto y aprendizaje automático. Son muchas las emperesas que lo emplean para obtener predicciones precisas. H2O implementa casi todos los algoritmos comunes de aprendizaje automático, como el modelado lineal generalizado (regresión lineal, regresión logística, etc.), Naïve Bayes, análisis de componentes principales, series de tiempo, agrupación de k-medias y otros. H2O también implementa los mejores algoritmos de su clase, como Random Forest, Gradient Boosting y Deep Learning a escala. Los algoritmos avanzados, están integrados para ayudar a los diseñadores de aplicaciones a crear aplicaciones más inteligentes a través de API elegantes [@candel2016deep].
+
+Antes de proceder al entrenamiento de un modelo, hay determinados pasos que se deben llevar cabo, como son: exploración de los datos, transformaciones, selección de predictores, etc. Sin embargo, vamos a considerar que los datos ya están listos para ser empleados por los algoritmos del aprendizaje y vamos a centrarnos por tanto en este último paso. Existen multiples tutoriales y documentos que muestran de forma detallada cada una de las etapas que forman parte del modelado por ejemplo en los siguientes links:
+https://machinelearningmastery.com/machine-learning-in-r-step-by-step/
+https://lgatto.github.io/IntroMachineLearningWithR/an-introduction-to-machine-learning-with-r.html
+
+Nos vamos a centrar en este caso en el lenguaje R con el empleo de Rstudio. Es importante considerar que aunque los comandos se ejecuten desde R, los datos se encuentran en el cluster de H2O, no en memoria. Solo cuando los datos se cargan en memoria, se les pueden aplicar funciones propias de R.
+
+Las funciones as.data.frame() y as.h2o() permiten transferir los datos de la sesión de R al cluster H2O y viceversa. Debemos tener cuidado cuando pasamos los datos desde H2O a R, ya que implica cargar todos los datos y, si son demasiados pueden ocupar toda la memoria. Para evitar este tipo de problemas, se recomiend realizar todos los pasos posibles (filtrado, agregaciones, cálculo de nuevas columnas…) con las funciones de H2O antes de transferir los datos.
+
+# Instalación H2O
+
+Si hay que instalarlo o actualizarlo, es mejor hacerlo desde su cuenta de AWS según el siguiente código.
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+# http://h2o-release.s3.amazonaws.com/h2o/rel-wolpert/2/index.html
+# The following two commands remove any previously installed H2O packages for R.
+if ("package:h2o" %in% search()) { detach("package:h2o", unload=TRUE) }
+if ("h2o" %in% rownames(installed.packages())) { remove.packages("h2o") }
+
+# Next, we download packages that H2O depends on.
+pkgs <- c("RCurl","jsonlite")
+for (pkg in pkgs) {
+if (! (pkg %in% rownames(installed.packages()))) { install.packages(pkg) }
+}
+
+# Now we download, install and initialize the H2O package for R.
+install.packages("h2o", type="source", repos="http://h2o-release.s3.amazonaws.com/h2o/rel-wolpert/2/R")
+library(h2o)
+```
+O podemos instalarlo directamente desde r. Una vez que H2O ha sido instalado, hay que iniciarlo, bien en todo el cluster o en un solo ordenador. Para este ejemplo, se emplea un único ordenador del que se utilizan todos sus cores en paralelo.
+
+```{r}
+# install.packages("h2o")
+library(h2o)
+```
+
+Iniciamos un servidor H2O de 1 nodo en nuestro PC local y permitamos que use todos los núcleos de CPU y hasta 2 GB de memoria:
+
+```{r}
+h2o.init(nthreads=-1, max_mem_size="2G") # Creación de un cluster local.
+# -1 indica que se empleen todos los cores disponibles
+# Máxima memoria disponible para el cluster.
+h2o.removeAll() ## clean slate - En caso de que haya algo disponible en memoria
+```
+
+Tras iniciar el cluster (local), se muestran por pantalla sus características, entre las que están: el número de cores activados (8), la memoria total del cluster ( 1.78GB), el número de nodos (1 porque se está empleando un único ordenador) y el puerto con el que conectarse a la interfaz web de H2O (http://localhost:54321/flow/index.html).
+
+Si se desea lanzar H2O en un cluster Hadoop ya establecido, solo es necesario especificar la dirección IP y puerto de acceso en h2O.init().
+
+La función *h2o.deeplearning*  se ajusta a los modelos de aprendizaje profundo de H2O desde dentro de R. Podemos ejecutar el ejemplo desde la página del manual utilizando la examplefunción, o ejecutar una demostración más larga desde el h2opaquete utilizando la demofunción.
+
+```{r eval=FALSE, include=TRUE}
+args(h2o.deeplearning)
+help(h2o.deeplearning)
+example(h2o.deeplearning)
+#demo(h2o.deeplearning)  #requires user interaction
+
+# Para que no se muestre la barra de progreso.
+h2o.no_progress()
+```
+
+# Los datos
+
+Para aprender a usar este paquete, lo mejor es utilizando un set de datos. Para los ejemplos de este documento se emplean dos set de datos, el primero se corresponde con *Contraceptive Method Choice Data Set* disponible en UCI Machine Learning Repository. Este set de datos contiene información sobre un subconjunto de la Encuesta Nacional de Prevalencia de Anticonceptivos de Indonesia de 1987.
+(http://archive.ics.uci.edu/ml/datasets/Contraceptive+Method+Choice)
+
+Este conjunto de datos es un subconjunto de la Encuesta nacional de prevalencia de anticonceptivos de Indonesia de 1987. Las muestras son mujeres casadas que no estaban embarazadas o no saben si estaban en el momento de la entrevista. El problema es predecir la elección actual del método anticonceptivo (sin uso, métodos a largo plazo o métodos a corto plazo) de una mujer en función de sus características demográficas y socioeconómicas.
+
+1. Edad de la esposa (numérica)
+2. Educación de la esposa (categórica) 1 = baja, 2, 3, 4 = alta
+3. Educación del esposo (categórica) 1 = baja, 2, 3, 4 = alta
+4. Número de hijos nacidos (numérico)
+5. La religión de la esposa (binaria) 0 = No islam, 1 = Islam
+6. ¿La esposa ahora está trabajando? (binario) 0 = Sí, 1 = No
+7. Ocupación del esposo (categórico) 1, 2, 3, 4
+8. Índice de nivel de vida (categórico) 1 = bajo, 2, 3, 4 = alto
+9. Exposición a los medios (binario) 0 = Bueno, 1 = No bueno
+10. Método anticonceptivo utilizado (atributo de clase) 1 = Sin uso, 2 = A largo plazo, 3 = A corto plazo
+
+La carga de datos puede hacerse directamente al cluster H2O, o bien cargándolos primero en memoria en la sesión de R y después transfiriéndolos. La segunda opción no es aconsejable si el volumen de datos es muy grande.
+
+El segundo set de datos se denomina *Covtype*, un conjunto de gran tamaño y con un estructura algo más complicada, que emplearemos en el modelo de Deep Learning. Contiene 581012 filas con 54 atributos.Los datos se encuentran disponibles en el enlace: http://archive.ics.uci.edu/ml/datasets/Covertype
+
+Se utiliza para predecir el tipo de cubierta forestal solo a partir de variables cartográficas (sin datos de detección remota). Los datos están en forma cruda (sin escala) y contienen columnas binarias (0 o 1) de datos para variables cualitativas independientes (áreas silvestres y tipos de suelo).
+
+Se proporciona el nombre del atributo, el tipo de atributo, la unidad de medida y una breve descripción. El tipo de cubierta forestal es el problema de clasificación. El orden de este listado corresponde al orden de los números a lo largo de las filas de la base de datos.
+
+Nombre / Tipo de datos / Medición / Descripción
+Elevación / cuantitativo / metros / Elevación en metros
+Aspecto / cuantitativo / acimut / Aspecto en grados azimut
+Pendiente / cuantitativo / grados / Pendiente en grados
+Horizontal_Distance_To_Hydrology / quantitative / meters / Horz Dist a las características de agua superficial más cercanas
+Vertical_Distance_To_Hydrology / cuantitativo / metros / Dist. vertical a las características de agua superficial más cercanas
+Horizontal_Distance_To_Roadways / cuantitativo / metros / Dist Horz a la carretera más cercana
+Hillshade_9am / quantitative / 0 a 255 index / Hillshade index a las 9am, solsticio de verano
+Hillshade_Noon / quantitative / 0 a 255 index / Hillshade index al mediodía, soltice de verano
+Hillshade_3pm / quantitative / 0 a 255 index / Hillshade index a las 3pm, summer solstice
+Horizontal_Distance_To_Fire_Points / cuantitativo / metros / Dist Horz a los puntos de ignición de incendios forestales más cercanos
+Wilderness_Area (4 columnas binarias) / cualitativo / 0 (ausencia) o 1 (presencia) / Designación de área silvestre
+Soil_Type (40 columnas binarias) / cualitativo / 0 (ausencia) o 1 (presencia ) / Designación de tipo de suelo
+Cover_Type (7 tipos) / entero / 1 a 7 / Designación de tipo de cubierta forestal
+
+```{r}
+# Carga de datos en el cluster H2O desde url.
+library(R.utils)
+# datos_h2o <- h2o.importFile(path   = url, header = TRUE, 
+# sep    = ",", destination_frame = "datos_h2o")
+
+# SET DATA 1
+# Carga de datos en R y transferencia a H2O.
+url <- "http://archive.ics.uci.edu/ml/machine-learning-databases/cmc/cmc.data"
+destino <- "./cmc.data"
+download.file(url, destino)
+gunzip("cmc.data", remove=FALSE)
+
+datos_r <- read.csv(file = "./cmc.data", header = TRUE)
+datos_h2o <- as.h2o(x = datos_r, destination_frame = "datos_h2o")
+
+# SET DATA 2
+Carga de datos en R y transferencia a H2O.
+url1 <- "http://archive.ics.uci.edu/ml/machine-learning-databases/covtype/covtype.data.gz"
+destino1 <- "./covtype.data"
+download.file(url1, destino1)
+gunzip("covtype.data", remove=FALSE)
+
+datos_r1 <- read.csv(file = "./covtype.data", header = TRUE)
+datos_h2o1 <- as.h2o(x = datos_r1, destination_frame = "datos_h2o1")
+
+```
+
+Todos los datos, asi como el codigo R empoleado se encuentran en el siguiente repositorio GitHUb:
+
+https://github.com/mariaplaza/Debate_MachineLearning
+
+## Exploración de los datos
+
+Aunque el conjunto de datos seleccionado para este ejemplo es lo suficientemente pequeño para cargarlo en memoria y emplear las funciones de r, vamos a emplear funciones propias de H2O.
+
+```{r}
+# Dimensiones del set de datos
+h2o.dim(datos_h2o)
+
+# Nombre de las columnas
+h2o.colnames(datos_h2o)
+
+```
+
+Renombramos las columnas, para entender mejor las variables:
+
+```{r}
+colnames(datos_h2o) <- c("age", "wife_education", "husband_education", 
+                         "children","religion", "work_situation", 
+                         "husband_occupation","standard_living", "exposition", 
+                         "Contraceptive_Method")
+```
+
+La función h2o.describe() nos da un análisis rápido que muestre el tipo de datos, la cantidad de valores ausentes, el valor mínimo, máximo, media, desviación típica y el número de categorías (Cardinality) de cada una de las variables. H2O emplea el nombre *enum* para los datos de tipo factor o character.
+
+```{r}
+h2o.describe(datos_h2o)[,1:10]
+```
+
+Para conocer el índice o nombre de las columnas que son de un determinado tipo, por ejemplo, numérico, se emplea la función *h2o.columns_by_type()*. De esta forma, con la función *h2o.cor()* podemos caluclar la correlación entre dos o más columnas numéricas.
+
+```{r}
+indices <- h2o.columns_by_type(object = datos_h2o, coltype = "numeric")
+h2o.cor(x = datos_h2o[, indices], y = NULL, method = "Pearson", na.rm = TRUE)[,1:7]
+```
+
+Para contar el número de observaciones de cada clase en una variable categórica, como es en este caso la variable respuesta *método anticonceptivo*, se emplea la función h2o.table().
+
+```{r}
+# Se crea una tabla con el número de observaciones de cada tipo.
+metodo <- as.data.frame(h2o.table(datos_h2o$Contraceptive_Method ))
+metodo
+```
+
+Y podemos realizar una grafica para tner una idea representativa:
+
+```{r}
+library(ggplot2)
+ggplot(
+  data = metodo,
+  aes(x = Contraceptive_Method, y = Count, fill = Contraceptive_Method)) +
+geom_col() +
+theme_bw() +
+labs(
+  x = "Método anticonceptivo", y = "Número de observaciones",
+  title = "Distribución de los métodos anticonceptivos") +
+theme(legend.position = "none")
+```
+
+# Especificando el número de muestras de entrenamiento
+
+El objetivo del problema es crear un modelo capaz de predecir correctamente el tipo de métdo anticonceptivo empleado.El conjunto de entrenamiento se emplea para ajustar el modelo, el de validación para encontrar los mejores hiperparámetros (model tuning) y el de test para estimar el error que comete el modelo al predecir nuevos datos.
+
+Si el número de observaciones es limitado, como es el caso en el data set *Contraceptive* crear 3 particiones puede generar grupos demasiado pequeños y variables. En estos casos, es preferible dividir los datos únicamente en un conjunto de entrenamiento y otro de test, y utilizar validación cruzada (cross validation) sobre el conjunto de entrenamiento durante la optimización de los hiperparámetros del modelo. Sin embargo en el data set *Covtype* podremos hacer tres subconjuntos.
+
+Mostraremos ambas posibilidades. En el ejemplo de modelo GLM se emplearemos validación cruzada con el data set *Contraceptive*, mientras que en el otro modelo (Deep Learning), se emplea un solo conjunto de validación; además cuando se trabaja con un gran conjunto de datos, no suele ser factible aplicar validación cruzada.
+
+La función h2o.splitFrame() realiza particiones aleatorias:
+
+```{r}
+# Separación de las observaciones en conjunto de entrenamiento y test.
+# En los ejemplos de GBM y deep learning se repetirá la separación, pero en 
+# tres conjuntos en lugar de dos.
+separaciones     <- h2o.splitFrame(data = datos_h2o, ratios = c(0.7), seed = 123)
+datos_train_h2o <- h2o.assign(data = separaciones[[1]], key = "datos_train_H2O")
+datos_test_h2o  <- h2o.assign(data = separaciones[[2]], key = "datos_test_H2O")
+```
+
+Veamos el número de observaciones de cada clase, en numero y porcentaje
+
+```{r}
+h2o.table(datos_train_h2o$Contraceptive_Method)
+# En porcentaje
+h2o.table(datos_train_h2o$Contraceptive_Method)/h2o.nrow(datos_train_h2o)
+
+h2o.table(datos_test_h2o$Contraceptive_Method)
+# En porcentaje
+h2o.table(datos_test_h2o$Contraceptive_Method)/h2o.nrow(datos_test_h2o)
+```
+
+# Preprocesado de datos
+
+Una de las funciones fundamentales de H2O es que incorpora y automatiza gran parte de las transformaciones necesarias para que los datos puedan ser ingeridos por los algoritmos de machine learning. Estas funciones se aplican automáticamente cuando el modelo se emplea para predecir nuevas observaciones. garantizando que no se viola la condición de que ninguna información procedente de las observaciones de test participe o influya en el ajuste del modelo.
+
+-	identifica automáticamente que variables son categóricas y crea internamente las variables dummy correspondientes
+-	estandariza los predictores numéricos antes de ajustar los modelos para que todos tengan media cero y varianza uno.
+-	excluye las columnas con valor constante, ya que no se deben de incluir en un modelo predictores que contengan un único valor (varianza cero), al no aportar información.
+-	Balance de clases: con el argumento *balance_classes* se puede indicar que antes de ajustar el modelo se equilibren las clases, si es necesario, indicando *undersampling* u *oversampling*.
+
+# Modelos
+
+**H2O** incorpora varios algoritmos de machine learning, pudiendo trabajar con ellos de forma distribuida y/o en paralelo. Algunos de ellos son:
+
+- Cox Proportional Hazards (CoxPH)
+- Deep Learning (Neural Networks)
+- Distributed Random Forest (DRF)
+- Generalized Linear Model (GLM)
+- Gradient Boosting Machine (GBM)
+- Naïve Bayes Classifier
+- Stacked Ensembles
+- XGBoost
+
+En este documento se muestran ejemplos con Generalized Linear Model (GLM) y Deep Learning (Neural Networks).
+
+## Optimización de hiperparámetros
+
+Los parametros que incluyen algunos modelos deben ser introducidos manualmente por el analista, son los hiperparámetros. sin embargo, no se puede conocer de antemano cuál es el adecuado. La forma más común de encontrar los valores óptimos es probando diferentes posibilidades, lo que se conoce como *tunning*.
+
+**H2O** posee la función *h2o.grid()* para realizar la búsqueda de los mejores hiperparámetros, sus argumentos principales son: el nombre del algoritmo, los parámetros del algoritmo, una lista con los valores de los hiperparámetros que se quieren comparar, el tipo de búsqueda (“Cartesian” o “RandomDiscrete”) y, si es de tipo random, un criterio de parada.
+
+# Generalized Linear Model (GLM)
+
+Se comprueba que la variable respuesta es de tipo factor y se define la variable respuesta y los predictores, en este caso, tendremos en cuenta todos los predictores disponibles.
+
+```{r}
+datos_train_h2o$Contraceptive_Method <- h2o.asfactor(datos_train_h2o$Contraceptive_Method)
+datos_test_h2o$Contraceptive_Method  <- h2o.asfactor(datos_test_h2o$Contraceptive_Method)
+h2o.isfactor(datos_train_h2o$Contraceptive_Method)
+
+var_respuesta <- "Contraceptive_Method"
+predictores   <- setdiff(h2o.colnames(datos_h2o), var_respuesta)
+
+```
+
+El siguiente paso es crear el modelo y lo validamos mediente 5-CV para estimar el error:
+
+```{r}
+
+modelo_glm <- h2o.glm(
+                y = var_respuesta,
+                x = predictores,
+                training_frame = datos_train_h2o,
+                family = "multinomial",
+                link   = "family_default",
+                standardize  = TRUE,
+                balance_classes   = FALSE,
+                ignore_const_cols = TRUE,
+                # Especificamos que hacer con observaciones incompletas o missing values
+                missing_values_handling = "Skip",
+                # Se hace una búsqueda del hiperparámetro lamba
+                lambda_search = TRUE,
+                # Selección automática del solver adecuado
+                solver = "AUTO",
+                alpha  = 0.95,
+                # Validación cruzada de 5 folds para estimar el error del modelo.
+                seed = 123,
+                nfolds = 5,
+                # Reparto estratificado de las observaciones en la creación de las particiones.
+                fold_assignment = "Stratified",
+                keep_cross_validation_predictions = FALSE,
+                model_id = "modelo_glm"
+              )
+
+summary(modelo_glm)
+
+```
+
+Si llamamos directamente al modelo se muestra toda la información disponible, como el tipo de modelo, coeficientes de regresión obtenidos, métricas… Para poder acceder directamente a la información de interés, H2O posee una serie de funciones que extraen información concreta del modelo.
+
+```{r}
+library(dplyr)
+# Coeficientes de regresión de cada uno de los predictores.
+as.data.frame(modelo_glm@model$coefficients_table) %>% head()
+
+# Predictores incluidos.
+names(modelo_glm@model$coefficients[modelo_glm@model$coefficients != 0])
+```
+
+La importancia de los predictores puede estudiarse a partir de las siguientes funcioes que incorpora el paquete *H2o*:
+
+```{r}
+# Equivalente:
+h2o.varimp(modelo_glm)
+h2o.varimp_plot(modelo_glm)
+```
+
+Podemos obtener toda una serie de métricas a partir de los datos de entrenamiento con las siguientes funciones:
+
+```{r}
+h2o.performance(model = modelo_glm, train = TRUE)
+
+```
+
+Una vez que el modelo ha sido entrenado, puede emplearse para predecir nuevas observaciones con la función h2o.predict(), que recibe como argumentos: un modelo (el modelo creado *modelo_glm*) y un nuevo set de datos (*datos_test_h2o*).
+
+```{r}
+
+predicciones <- h2o.predict(object = modelo_glm, newdata = datos_test_h2o)
+predicciones
+```
+
+El resultado devuelto por esta función es una tabla con 4 columnas en este caso, una con la clase predicha y otras tres con la probabilidad de pertenecer a cada una de las clases. Si el nuevo set de datos incluye la variable respuesta, se pueden calcular métricas que cuantifican el grado de acierto. Por otro lado, calculamos de forma manual la precisión del modelo, que como vemos no es muy elevada (0.5138889), quiza debido al pequeño conjunto de datos.
+
+```{r}
+h2o.performance(model = modelo_glm, newdata = datos_test_h2o)
+
+# Cálculo manual de accuracy
+mean(as.vector(predicciones$predict) == as.vector(datos_test_h2o$Contraceptive_Method))
+```
+
+Para intentar mejorar el modelo, intentamos una búsqueda del valor *alpha*, ya que antes se ha empleado un valor fijo. Por ello repetimos el modelo, comparando en este caso distintos valores de *alpha*. Para estimar la capacidad predictiva de cada modelo se emplea validación cruzada con 10 particiones.
+
+```{r}
+# Valores de alpha que se van a comparar.
+param_alpha <- list(alpha = c(0, 0.1, 0.5, 0.95, 1))
+
+grid_glm <- h2o.grid(
+    # Algoritmo y parámetros
+    algorithm      = "glm",
+    family = "multinomial",
+    link   = "family_default",
+    # Variable respuesta y predictores
+    y              = var_respuesta,
+    x              = predictores,
+    # Datos de entrenamiento
+    training_frame = datos_train_h2o,
+    # Preprocesado
+    standardize    = TRUE,
+    missing_values_handling = "Skip",
+    ignore_const_cols = TRUE,
+    # Hiperparámetros
+    hyper_params    = param_alpha,
+    # Tipo de búsqueda
+    search_criteria = list(strategy = "Cartesian"),
+    lambda_search   = TRUE,
+    # Selección automática del solver adecuado
+    solver          = "AUTO",
+    # Estrategia de validación para seleccionar el mejor modelo
+    seed            = 123,
+    nfolds          = 10,
+    # Reparto estratificado de las observaciones en la creación
+    # de las particiones
+    fold_assignment = "Stratified",
+    keep_cross_validation_predictions = FALSE,
+    grid_id         = "grid_glm"
+)
+```
+
+```{r}
+# Se muestran los modelos ordenados de mayor a menor por precision.
+resultados_grid <- h2o.getGrid(
+                    grid_id = "grid_glm",
+                    sort_by = "accuracy",
+                    decreasing = TRUE
+                  )
+print(resultados_grid)
+```
+
+En este caso, los resultados de los 5 modelos son prácticamente idénticos, con una precisión muy baja. Podríamos intentar de nueo otro modelo cambiando algunos de los argumentos, por ejemplo el tipo de familia que implementa el model, "poisson", "gamma" o "tweedie" podrian ser algunas de las opciones.
+
+Una vez identificado el mejor modelo, mediante h2o.grid(), se extrae del objeto grid y se almacena por separado.
+
+```{r}
+modelo_glm_final <- h2o.getModel(resultados_grid@model_ids[[1]])
+```
+
+# Deep Learning (Neural Networks)
+
+Como sabemos, el término *deep learning* engloba a todo un conjunto de modelos basados en redes neuronales artificiales (artificial neural networks) que contienen múltiples capas intermedias (ocultas). En nuestro caso, H2O incorpora redes neuronales de tipo Multi-layer - feedforward - neural networks, que se caracterizan por tener una o múltiples capas intermedias, con una estructura full conected, lo que significa que cada neurona está conectada con todas las neuronas de la capa siguiente.
+
+Los modelos de Deep Learning ofrecidos por **H2O** tienen un número muy elevado de parámetros configurables. Para la gran mayoría de casos, los valores por defecto dan buenos resultados, sin embargo, es conveniente conocer, al menos, los más influyentes, que incluyen funciones de arquitectura, pre-procesado, aprendizaje y regularización.
+
+Veamos su funcionamiento con el conjunto de datos de *Covtype*. Dividimos los datos en tres grupos: 60% para entrenamiento, 20% para validación (ajuste de hiperparámetros) y 20% para pruebas finales. Pero primero escogemos solo las primeros columnas con las descripcion de las zonas y la variable clase (columna 55).
+
+```{r}
+# Dimensiones del set de datos
+h2o.dim(datos_h2o1)
+# Nombre de las columnas
+h2o.colnames(datos_h2o1)
+
+seleccion <- c("X2596", "X51", "X3", "X258", "X0", "X510", "X221", "X232", 
+               "X148", "X6279", "X1", "X0.1",  "X0.2" , "X0.3", "X5")
+datos_h2o1 <- datos_h2o1[seleccion]
+str(datos_h2o1)
+```
+
+Renombramos las columnas, para entender mejor las variables:
+
+```{r}
+
+colnames(datos_h2o1) <- c("Elevation", "Aspect", "Slope", 
+                          "Horizontal_Distance_To_Hydrology",
+                           "Vertical_Distance_To_Hydrology", 
+                          "Horizontal_Distance_To_Roadways", 
+                          "Hillshade_9am","Hillshade_Noon", 
+                          "Hillshade_3pm", 
+                          "Horizontal_Distance_To_Fire_Points",
+                          "Wilderness_Area1","Wilderness_Area2", 
+                          "Wilderness_Area3", "Wilderness_Area4",
+                          "Cover_Type")
+```
+
+Creamos los grupos con los que vamos a trabajar:
+
+```{r}
+splits <- h2o.splitFrame(datos_h2o1, c(0.6,0.2), seed=1234)
+train  <- h2o.assign(splits[[1]], "train.hex") # 60%
+valid  <- h2o.assign(splits[[2]], "valid.hex") # 20%
+test   <- h2o.assign(splits[[3]], "test.hex")  # 20%
+```
+
+POdemos ahora realizar diagramas de dispersión mediante binning (para columnas categóricas y numéricas) y familiarizarnos con el conjunto de datos.
+
+```{r}
+#dev.new(noRStudioGD=FALSE) #direct plotting output to a new window
+par(mfrow=c(1,1)) # reset canvas
+plot(h2o.tabulate(datos_h2o1,"Elevation","Cover_Type"))
+plot(h2o.tabulate(datos_h2o1,"Horizontal_Distance_To_Roadways","Cover_Type"))
+plot(h2o.tabulate(datos_h2o1,"Aspect","Cover_Type"))
+plot(h2o.tabulate(datos_h2o1,"Horizontal_Distance_To_Roadways","Elevation" ))
+```
+
+## Creacion del modelo
+
+Ejecutemos nuestro primer modelo de Deep Learning en el conjunto de datos de tipo *covtype*. Queremos predecir la columna *Cover_Type*, una característica categórica con 7 niveles, y el modelo de Aprendizaje Profundo tendrá la tarea de realizar la clasificación (multi-clase). Utiliza los otros 12 predictores del conjunto de datos, de los cuales 10 son numéricos y 2 son categóricos con un total de 44 niveles.
+
+```{r}
+response <- "Cover_Type"
+predictors <- setdiff(names(datos_h2o1), response)
+predictors
+```
+
+Para que sea más rapido, solo empleamos un *epoch* (una unica pasada sobre los datos de entrenamiento).
+
+```{r}
+modelo1 <- h2o.deeplearning(
+  model_id="dl_model_first", 
+  training_frame=train, 
+  validation_frame=valid,## validation dataset: uutilizado para anotar y detenerse
+  x=predictors,
+  y=response,
+  #activation="Rectifier",## por defecto
+  #hidden=c(200,200), ## por defecto: 2 capas ocultas con 200 neuronas cada una
+  epochs=1,
+  variable_importances=T ## no posible por defecto
+)
+summary(modelo1)
+plot(modelo1)
+```
+
+La importancia de cada una de las variables en los modelos de redes neuronales son difíciles de calcular, y existen muchas dificultades. *H2O* Deep Learning ha implementado el método de Gedeon y devuelve importancias de variables relativas en orden descendente de importancia.
+
+```{r}
+head(as.data.frame(h2o.varimp(modelo1)))
+```
+
+El siguiente paso es ejecutar otra red más pequeña y dejamos que se detenga automáticamente una vez que converge la tasa de clasificación errónea (específicamente, si el promedio móvil de longitud 2 no mejora al menos un 1% en 2 eventos de puntuación consecutivos). También se muestra el conjunto de validación en 10,000 filas para una puntuación más rápida.
+
+```{r}
+modelo2 <- h2o.deeplearning(
+  model_id="dl_model_faster", 
+  training_frame=train, 
+  validation_frame=valid,
+  x=predictors,
+  y=response,
+  hidden=c(32,32,32),  ## una pequeña red, corre más rápido
+  epochs=100000,       ## aunque se espera que converja antes...
+  score_validation_samples=10000, ## conjunto de datos de validación (más rápido)
+  stopping_rounds=2,
+  stopping_metric="MSE", ## podria ser "RMSE","logloss","r2"
+  stopping_tolerance=0.01
+)
+summary(modelo2)
+plot(modelo2)
+```
+
+## Tuning
+
+Con algunos ajustes (tuning), es posible obtener una tasa de error del conjunto de prueba inferior al 10% en aproximadamente un minuto. Las tasas de error por debajo del 5% son posibles con modelos más grandes. Tenga en cuenta que los métodos deep tree pueden ser más efectivos para este conjunto de datos que Deep Learning, ya que dividen directamente el espacio en sectores, lo que parece ser mas apropiado en este caso.
+
+```{r message=FALSE, warning=FALSE}
+modelo3 <- h2o.deeplearning(
+  model_id="dl_model_tuned", 
+  training_frame=train, 
+  validation_frame=valid, 
+  x=predictors, 
+  y=response, 
+  overwrite_with_best_model=F, ## modelo final después de 10 epoch, incluso si no es el mejor.
+  hidden=c(128,128,128),  ## más capas ocultas -> interacciones más complejas
+  epochs=10,              ## para que sea lo suficientemente corto
+  score_validation_samples=1000, 
+  score_duty_cycle=0.025, ## no anota más del 2.5% del tiempo
+  # adaptive_rate= FALSE, ## tasa de aprendizaje ajustada manualmente
+  rate=0.01, 
+  rate_annealing=2e-6,            
+  momentum_start=0.2, ## impulso sintonizado manualmente
+  momentum_stable=0.4, 
+  momentum_ramp=1e7, 
+  l1=1e-5,           ## agrega cierta regularización L1 / L2
+  l2=1e-5,
+  max_w2=10         ## ayuda a la estabilidad del rectificador
+) 
+summary(modelo3)
+```
+
+Comparemos el error de entrenamiento con los errores de validación y prueba
+
+```{r}
+h2o.performance(modelo3, train=T)  ## sampled training data (del modelo)
+h2o.performance(modelo3, valid=T)  ## sampled validation data (del modelo)
+h2o.performance(modelo3, newdata=train) ## completo training data
+h2o.performance(modelo3, newdata=valid) ## completo validation data
+h2o.performance(modelo3, newdata=test)  ## completo test data
+```
+
+Para confirmar que la matriz de confusión en el conjunto de validación (aquí, el conjunto de prueba) era correcta, hacemos una predicción en el conjunto de prueba y comparamos las matrices de confusión explícitamente:
+
+```{r}
+pred <- h2o.predict(modelo3, test)
+pred
+test$Accuracy <- pred$predict == test$Cover_Type
+1-mean(test$Accuracy)
+```
+
+## Importancia de los predictores
+
+Dado que hay muchos parámetros que pueden afectar la precisión del modelo, el ajuste de hiperparámetros es especialmente importante para Deep Learning. Para la velocidad, solo entrenaremos en las primeras 10,000 filas del conjunto de datos de entrenamiento:
+
+```{r}
+sampled_train=train[1:10000,]
+
+# El método de búsqueda de hiperparámetro más simple es una exploración
+# de fuerza bruta del producto cartesiano completo de todas las 
+# combinaciones especificadas por una búsqueda de cuadrícula:
+
+hyper_params <- list(
+  hidden=list(c(32,32,32),c(64,64)),
+  input_dropout_ratio=c(0,0.05),
+  rate=c(0.01,0.02),
+  rate_annealing=c(1e-8,1e-7,1e-6)
+)
+hyper_params
+grid <- h2o.grid(
+  algorithm="deeplearning",
+  grid_id="dl_grid", 
+  training_frame=sampled_train,
+  validation_frame=valid, 
+  x=predictors, 
+  y=response,
+  epochs=10,
+  stopping_metric="MSE",
+  stopping_tolerance=1e-2, ## para cuando MSE no mejora >=1% para dos eventos
+  stopping_rounds=2,
+  score_validation_samples=100000, ## conjunto de validación
+  score_duty_cycle=0.025, ## no anote más del 2.5% del tiempo
+  adaptive_rate=F,        ## tasa de aprendizaje ajustada manualmente
+  momentum_start=0.5,     ## impulso sintonizado manualmente
+  momentum_stable=0.9, 
+  momentum_ramp=1e7, 
+  l1=1e-5,
+  l2=1e-5,
+  activation=c("Rectifier"),
+  max_w2=10,                     
+  hyper_params=hyper_params
+)
+grid
+```
+
+Se muestran los modelos ordenados de mayor a menor AUC:
+
+```{r}
+resultados_grid <- h2o.getGrid(
+                     grid_id = "dl_grid",
+                     sort_by = "r2",
+                     decreasing = TRUE
+                   )
+
+data.frame(resultados_grid@summary_table) %>% select(-model_ids
+                                                     )
+```
+
+El modelo que consigue mayor r2 de validación es el que tiene una arquitectura de tres capas con 32 neuronas.
+Veamos qué modelo tuvo el error de validación más bajo:
+
+```{r}
+
+grid <- h2o.getGrid("dl_grid",sort_by="r2",decreasing=FALSE)
+grid
+
+## Para ver qué otros criterios "sort_by" están permitidos
+#grid <- h2o.getGrid("dl_grid",sort_by="wrong_thing",decreasing=FALSE)
+
+## ordenar por r2
+h2o.getGrid("dl_grid",sort_by="r2",decreasing=FALSE)
+
+## Find the best model and its full set of parameters
+grid@summary_table[1,]
+best_model <- h2o.getModel(grid@model_ids[[1]])
+best_model
+
+print(best_model@allparameters)
+print(h2o.performance(best_model, valid=T))
+print(h2o.logloss(best_model, valid=T))
+```
+
+Una vez que estamos satisfechos con los resultados, podemos guardar el modelo en el disco (en el clúster). En este ejemplo, almacenamos el modelo en un directorio llamado mybest_deeplearning_covtype_model, que se creará para nosotros desde entonces force=TRUE.
+
+```{r eval=FALSE, include=TRUE}
+path <- h2o.saveModel(best_model, 
+          path="./mybest_deeplearning_covtype_model", force=TRUE)
+```
+
+Se puede cargar más tarde con el siguiente comando:
+
+```{r eval=FALSE, include=TRUE}
+print(path)
+m_loaded <- h2o.loadModel(path)
+summary(m_loaded)
+```
+
+Este modelo es completamente funcional y puede inspeccionarse, reiniciarse o usarse para calificar un conjunto de datos, etc. Tenga en cuenta que la compatibilidad binaria entre las versiones H2O no está garantizada actualmente.
+
+# Resources
+
+Mas informacion sobre machine learning con **H2O** y **R**
+
+*H2O*
+
+- Documentation for H2O and Sparkling Water: http://docs.h2o.ai/
+- Glossary of terms: https://github.com/h2oai/h2o-3/blob/master/h2o-docs/src/product/tutorials/glossary.md
+- Open forum for questions about H2O (Google account required): https://groups.google.com/forum/#!forum/h2ostream
+- Track or file bug reports for H2O: https://jira.h2o.ai
+- GitHub repository for H2O: https://github.com/h2oai
+
+*R*
+
+- About R: https://www.r-project.org/about.html
+- Download R: https://cran.r-project.org/mirrors.html
+- Latest R API H2O documentation: http://h2o-release.s3.amazonaws.com/h2o/latest_stable_Rdoc.html
+- Tutorial H2O and R: http://docs.h2o.ai/h2o-tutorials/latest-stable/resources.html
+- Machine Learning con H2O y R: https://rpubs.com/Joaquin_AR/406480
+
+# References
+
+</div>
